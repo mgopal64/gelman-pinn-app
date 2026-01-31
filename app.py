@@ -33,7 +33,7 @@ class DioxanePINN(nn.Module):
 @st.cache_resource
 def load_model():
     model = DioxanePINN()
-    model.load_state_dict(torch.load('model_130_170ft.pth', map_location='cpu', weights_only=True))
+    model.load_state_dict(torch.load('model_130_170ftploss5', map_location='cpu', weights_only=True))
     model.eval()
     return model
 
