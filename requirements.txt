@@ -1,4 +1,8 @@
 streamlit
 torch
 numpy
+pandas
 matplotlib
+folium
+streamlit-folium
+branca
