@@ -47,7 +47,6 @@ class DioxanePINN(nn.Module):
         return self.network(x_combined)
 
     def get_physics_params(self, unit_type="Unit E"):
-        # Sigmoid scaling logic matches your notebook training constraints
         if "Unit E" in unit_type: # 130-170ft
             v = 0.46 + (0.96 - 0.46) * torch.sigmoid(self.v_raw)
             D = 5.47 + (21.90 - 5.47) * torch.sigmoid(self.D_raw)
@@ -62,22 +61,17 @@ def load_model(unit_selection):
     """Loads weights matching your GitHub repository structure."""
     model = DioxanePINN().to(device)
     
-    # Filenames match your screenshot
     if "Unit E" in unit_selection:
         filename = 'pinn_130_170_3input_final.pth'
     else:
         filename = 'weights_50_90ft_v2.pth'
     
     try:
-        # Load weights
         checkpoint = torch.load(filename, map_location=device)
-        
-        # Handle different saving formats (state_dict vs full model)
         if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
             model.load_state_dict(checkpoint['model_state_dict'])
         else:
             model.load_state_dict(checkpoint)
-            
         model.eval()
         return model, filename
     except FileNotFoundError:
@@ -104,7 +98,6 @@ if model:
     v_val = v_tens.item() * 365.25
     D_val = D_tens.item() * 365.25
 
-    # Sidebar Metrics
     st.sidebar.markdown("---")
     st.sidebar.subheader(" calibrated physics")
     st.sidebar.metric("Learned Velocity (v)", f"{v_val:.1f} ft/yr")
@@ -130,7 +123,8 @@ if model:
         t_norm = torch.ones_like(x_norm) * t_val
 
         with torch.no_grad():
-            c_out = model(torch.cat([x_norm, z_mid, t_norm], dim=1)).cpu().numpy()
+            # FIXED: Added .flatten() to ensure 1D array output
+            c_out = model(torch.cat([x_norm, z_mid, t_norm], dim=1)).cpu().numpy().flatten()
         
         c_ppb = 10**(c_out * C_LOG_MAX) - 1
 
@@ -146,13 +140,14 @@ if model:
         plugins.HeatMap(heat_data, radius=20, blur=15, min_opacity=0.3).add_to(m)
 
         # 7.2 ppb Front
-        front_idx = np.abs(c_ppb - 7.2).argmin()
-        if c_ppb[front_idx] >= 1.0: 
-            folium.Circle(
-                location=[lats[front_idx], lons[front_idx]],
-                radius=250, color='red', fill=True, fill_opacity=0.6,
-                popup=f'7.2 ppb Front ({selected_year})'
-            ).add_to(m)
+        if len(c_ppb) > 0:
+            front_idx = np.abs(c_ppb - 7.2).argmin()
+            if c_ppb[front_idx] >= 1.0: 
+                folium.Circle(
+                    location=[lats[front_idx], lons[front_idx]],
+                    radius=250, color='red', fill=True, fill_opacity=0.6,
+                    popup=f'7.2 ppb Front ({selected_year})'
+                ).add_to(m)
 
         # Markers
         folium.Marker(SOURCE_LAT_LON, popup="Gelman Source", icon=folium.Icon(color='red', icon='info-sign')).add_to(m)
@@ -191,21 +186,21 @@ if model:
         years_to_plot = [1986, 2024, 2060]
         fig2, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
         
-        # Prepare Grid
         x_res = 500
         x_grid = torch.linspace(0, 1, x_res, device=device).view(-1, 1)
-        z_grid = torch.ones_like(x_grid) * 0.5 # Midpoint
+        z_grid = torch.ones_like(x_grid) * 0.5 
 
         for i, yr in enumerate(years_to_plot):
             t_plot = torch.ones_like(x_grid) * ((yr - 1986) / T_MAX_YEARS)
             with torch.no_grad():
-                c_out = model(torch.cat([x_grid, z_grid, t_plot], dim=1)).cpu().numpy()
+                # FIXED: Added .flatten() here as well for safe plotting
+                c_out = model(torch.cat([x_grid, z_grid, t_plot], dim=1)).cpu().numpy().flatten()
             
             c_ppb_plot = 10**(c_out * C_LOG_MAX) - 1
             
             # Geo coords for plotting
-            easting = SOURCE_COORD_SPL[0] + (x_grid.cpu().numpy() * (TARGET_COORD_SPL[0] - SOURCE_COORD_SPL[0]))
-            northing = SOURCE_COORD_SPL[1] + (x_grid.cpu().numpy() * (TARGET_COORD_SPL[1] - SOURCE_COORD_SPL[1]))
+            easting = SOURCE_COORD_SPL[0] + (x_grid.cpu().numpy().flatten() * (TARGET_COORD_SPL[0] - SOURCE_COORD_SPL[0]))
+            northing = SOURCE_COORD_SPL[1] + (x_grid.cpu().numpy().flatten() * (TARGET_COORD_SPL[1] - SOURCE_COORD_SPL[1]))
             
             sc = axes[i].scatter(easting, northing, c=c_ppb_plot, cmap='jet', 
                                norm=LogNorm(vmin=1, vmax=1e5), s=20)
@@ -225,13 +220,11 @@ if model:
     with tab3:
         st.subheader(f"Vertical Plume Profile: {selected_unit}")
         
-        # Depth ranges
         if "Unit E" in selected_unit:
             z_min, z_max = 130, 170
         else:
             z_min, z_max = 50, 90
             
-        # Mesh Generation
         x_res, z_res = 200, 100
         x_mesh = np.linspace(0, 1, x_res)
         z_mesh = np.linspace(0, 1, z_res)
@@ -246,14 +239,13 @@ if model:
         with torch.no_grad():
             c_pred = model(input_tensor).cpu().numpy().reshape(z_res, x_res)
         
-        # Plotting
         fig3, ax3 = plt.subplots(figsize=(10, 4))
         x_feet = X * X_MAX_DIST
         z_feet = z_min + (Z * (z_max - z_min))
         
         heatmap = ax3.pcolormesh(x_feet, z_feet, c_pred, shading='gouraud', cmap='magma')
         fig3.colorbar(heatmap, label='Norm. Log-Concentration')
-        ax3.invert_yaxis() # Depth increases downwards
+        ax3.invert_yaxis() 
         ax3.set_ylabel("Depth (ft)")
         ax3.set_xlabel("Distance from Source (ft)")
         ax3.set_title(f"Vertical Slice ({selected_year})")
@@ -264,7 +256,6 @@ if model:
     with tab4:
         st.subheader("3D Plume Landscape")
         
-        # Re-using the mesh from Tab 3, just visualizing differently
         fig4 = plt.figure(figsize=(10, 6))
         ax4 = fig4.add_subplot(111, projection='3d')
         
@@ -273,7 +264,7 @@ if model:
         ax4.set_xlabel('Distance (ft)')
         ax4.set_ylabel('Depth (ft)')
         ax4.set_zlabel('Log-Conc')
-        ax4.set_ylim(z_max, z_min) # Invert depth axis visually
+        ax4.set_ylim(z_max, z_min)
         ax4.view_init(elev=35, azim=-60)
         
         st.pyplot(fig4)
