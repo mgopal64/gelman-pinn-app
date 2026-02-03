@@ -256,17 +256,22 @@ if model:
     with tab4:
         st.subheader("3D Plume Landscape")
         
-        fig4 = plt.figure(figsize=(10, 6))
+        # Re-using the mesh from Tab 3, just visualizing differently
+        # REDUCED FIGSIZE: Changed from (10, 6) to (8, 5) to make it smaller
+        fig4 = plt.figure(figsize=(8, 5)) 
         ax4 = fig4.add_subplot(111, projection='3d')
         
         surf = ax4.plot_surface(x_feet, z_feet, c_pred, cmap='magma', edgecolor='none', alpha=0.85)
         
-        ax4.set_xlabel('Distance (ft)')
-        ax4.set_ylabel('Depth (ft)')
-        ax4.set_zlabel('Log-Conc')
-        ax4.set_ylim(z_max, z_min)
-        ax4.view_init(elev=35, azim=-60)
+        ax4.set_xlabel('Distance (ft)', fontsize=10)
+        ax4.set_ylabel('Depth (ft)', fontsize=10)
+        ax4.set_zlabel('Log-Conc', fontsize=10)
+        ax4.set_ylim(z_max, z_min) # Invert depth axis visually
+        # Adjust viewing angle slightly for better perspective in smaller frame
+        ax4.view_init(elev=30, azim=-55) 
         
+        # Tight layout helps reduce whitespace around the smaller plot
+        plt.tight_layout()
         st.pyplot(fig4)
 
 else:
