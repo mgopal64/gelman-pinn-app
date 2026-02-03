@@ -256,23 +256,30 @@ if model:
     with tab4:
         st.subheader("3D Plume Landscape")
         
-        # Re-using the mesh from Tab 3, just visualizing differently
-        # REDUCED FIGSIZE: Changed from (10, 6) to (8, 5) to make it smaller
-        fig4 = plt.figure(figsize=(8, 5)) 
-        ax4 = fig4.add_subplot(111, projection='3d')
+        # 1. Create layout columns to constrain the size
+        # [1, 2, 1] creates empty space on left/right and puts plot in the middle 50%
+        col1, col2, col3 = st.columns([1, 2, 1])
         
-        surf = ax4.plot_surface(x_feet, z_feet, c_pred, cmap='magma', edgecolor='none', alpha=0.85)
-        
-        ax4.set_xlabel('Distance (ft)', fontsize=10)
-        ax4.set_ylabel('Depth (ft)', fontsize=10)
-        ax4.set_zlabel('Log-Conc', fontsize=10)
-        ax4.set_ylim(z_max, z_min) # Invert depth axis visually
-        # Adjust viewing angle slightly for better perspective in smaller frame
-        ax4.view_init(elev=30, azim=-55) 
-        
-        # Tight layout helps reduce whitespace around the smaller plot
-        plt.tight_layout()
-        st.pyplot(fig4)
+        with col2:
+            # Re-using the mesh from Tab 3
+            fig4 = plt.figure(figsize=(8, 6))
+            ax4 = fig4.add_subplot(111, projection='3d')
+            
+            surf = ax4.plot_surface(x_feet, z_feet, c_pred, cmap='magma', edgecolor='none', alpha=0.85)
+            
+            ax4.set_xlabel('Distance (ft)', fontsize=8)
+            ax4.set_ylabel('Depth (ft)', fontsize=8)
+            ax4.set_zlabel('Log-Conc', fontsize=8)
+            ax4.set_ylim(z_max, z_min)
+            
+            # Adjust tick label size for smaller plot
+            ax4.tick_params(axis='both', which='major', labelsize=8)
+            ax4.view_init(elev=35, azim=-60)
+            
+            plt.tight_layout()
+            
+            # 2. Render in the middle column
+            st.pyplot(fig4, use_container_width=True)
 
 else:
     st.error(f"⚠️ Model file not found. Expected: `{loaded_filename}`")
