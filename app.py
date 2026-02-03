@@ -47,6 +47,7 @@ class DioxanePINN(nn.Module):
         return self.network(x_combined)
 
     def get_physics_params(self, unit_type="Unit E"):
+        # Sigmoid scaling logic matches your notebook training constraints
         if "Unit E" in unit_type: # 130-170ft
             v = 0.46 + (0.96 - 0.46) * torch.sigmoid(self.v_raw)
             D = 5.47 + (21.90 - 5.47) * torch.sigmoid(self.D_raw)
@@ -58,25 +59,28 @@ class DioxanePINN(nn.Module):
 # --- 3. Model Loading Helper ---
 @st.cache_resource
 def load_model(unit_selection):
-    """Loads the specific model weights based on user selection."""
+    """Loads weights matching your GitHub repository structure."""
     model = DioxanePINN().to(device)
     
-    # Logic to select the correct weight file
-    # NOTE: Ensure these .pth files are in the same directory as app.py 
-    # or update the path variable below.
+    # Filenames match your screenshot
     if "Unit E" in unit_selection:
         filename = 'pinn_130_170_3input_final.pth'
     else:
         filename = 'weights_50_90ft_v2.pth'
     
     try:
+        # Load weights
         checkpoint = torch.load(filename, map_location=device)
-        state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
-        model.load_state_dict(state_dict)
+        
+        # Handle different saving formats (state_dict vs full model)
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            model.load_state_dict(checkpoint)
+            
         model.eval()
         return model, filename
     except FileNotFoundError:
-        st.error(f"⚠️ Model file `{filename}` not found. Please upload it to the app directory.")
         return None, filename
 
 # --- 4. Main Dashboard UI ---
@@ -134,6 +138,7 @@ if model:
         lats = np.linspace(SOURCE_LAT_LON[0], TARGET_LAT_LON[0], 100)
         lons = np.linspace(SOURCE_LAT_LON[1], TARGET_LAT_LON[1], 100)
         
+        # Filter for meaningful concentrations (>1.0 ppb)
         heat_data = [[lats[i], lons[i], float(c_ppb[i]/1000)] for i in range(100) if c_ppb[i] > 1.0]
 
         # Map Creation
@@ -142,7 +147,7 @@ if model:
 
         # 7.2 ppb Front
         front_idx = np.abs(c_ppb - 7.2).argmin()
-        if c_ppb[front_idx] >= 1.0: # Only show if plume exists
+        if c_ppb[front_idx] >= 1.0: 
             folium.Circle(
                 location=[lats[front_idx], lons[front_idx]],
                 radius=250, color='red', fill=True, fill_opacity=0.6,
@@ -152,6 +157,20 @@ if model:
         # Markers
         folium.Marker(SOURCE_LAT_LON, popup="Gelman Source", icon=folium.Icon(color='red', icon='info-sign')).add_to(m)
         folium.Marker(TARGET_LAT_LON, popup="Barton Pond Intake", icon=folium.Icon(color='green', icon='leaf')).add_to(m)
+
+        # Legend
+        legend_html = '''
+        <div style="position: fixed; bottom: 50px; left: 50px; width: 160px; height: 110px; 
+             background-color: white; border:2px solid grey; z-index:9999; font-size:12px;
+             padding: 10px;">
+             <b>Plume Intensity</b><br>
+             <i style="background: red; width: 10px; height: 10px; float: left; margin-right: 5px;"></i> High<br>
+             <i style="background: yellow; width: 10px; height: 10px; float: left; margin-right: 5px;"></i> Medium<br>
+             <i style="background: blue; width: 10px; height: 10px; float: left; margin-right: 5px;"></i> Low (>1.0 ppb)<br>
+             <i style="border: 2px solid red; border-radius: 50%; width: 8px; height: 8px; float: left; margin-right: 5px;"></i> 7.2 ppb Front
+        </div>
+        '''
+        m.get_root().html.add_child(Element(legend_html))
 
         # Render Map
         st_folium(m, width=800, height=500)
@@ -260,4 +279,5 @@ if model:
         st.pyplot(fig4)
 
 else:
-    st.info("👈 Please upload the model weights (.pth files) to the app directory to begin.")
+    st.error(f"⚠️ Model file not found. Expected: `{loaded_filename}`")
+    st.info("Please make sure you have uploaded the .pth files to your GitHub repository.")
