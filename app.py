@@ -112,6 +112,15 @@ if model:
         "⛰️ 3D Topography"
     ])
 
+    To fix the legend text visibility, I have added color: black; to the CSS style definition within the HTML string. This ensures the text renders in black regardless of the browser or Streamlit theme settings.
+
+Here is the updated code for Tab 1 in your app.py.
+
+📝 Updated app.py (Tab 1 Section)
+Replace the with tab1: block with this version:
+
+Python
+
     # === TAB 1: GEOGRAPHIC HEATMAP (FOLIUM) ===
     with tab1:
         st.subheader(f"Geographic Plume Spread ({selected_year})")
@@ -123,7 +132,6 @@ if model:
         t_norm = torch.ones_like(x_norm) * t_val
 
         with torch.no_grad():
-            # FIXED: Added .flatten() to ensure 1D array output
             c_out = model(torch.cat([x_norm, z_mid, t_norm], dim=1)).cpu().numpy().flatten()
         
         c_ppb = 10**(c_out * C_LOG_MAX) - 1
@@ -132,7 +140,6 @@ if model:
         lats = np.linspace(SOURCE_LAT_LON[0], TARGET_LAT_LON[0], 100)
         lons = np.linspace(SOURCE_LAT_LON[1], TARGET_LAT_LON[1], 100)
         
-        # Filter for meaningful concentrations (>1.0 ppb)
         heat_data = [[lats[i], lons[i], float(c_ppb[i]/1000)] for i in range(100) if c_ppb[i] > 1.0]
 
         # Map Creation
@@ -153,11 +160,11 @@ if model:
         folium.Marker(SOURCE_LAT_LON, popup="Gelman Source", icon=folium.Icon(color='red', icon='info-sign')).add_to(m)
         folium.Marker(TARGET_LAT_LON, popup="Barton Pond Intake", icon=folium.Icon(color='green', icon='leaf')).add_to(m)
 
-        # Legend
+        # Legend (FIXED: Added 'color: black;' to style)
         legend_html = '''
         <div style="position: fixed; bottom: 50px; left: 50px; width: 160px; height: 110px; 
              background-color: white; border:2px solid grey; z-index:9999; font-size:12px;
-             padding: 10px;">
+             padding: 10px; color: black;">
              <b>Plume Intensity</b><br>
              <i style="background: red; width: 10px; height: 10px; float: left; margin-right: 5px;"></i> High<br>
              <i style="background: yellow; width: 10px; height: 10px; float: left; margin-right: 5px;"></i> Medium<br>
