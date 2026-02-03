@@ -2,23 +2,39 @@ import streamlit as st
 import torch
 import torch.nn as nn
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
+import folium
+from folium import plugins
+from streamlit_folium import st_folium
+from branca.element import Element
+import os
 
-# Constants
-T_MAX_YEARS = 70.0
+# --- 1. Global Configuration & Constants ---
+st.set_page_config(page_title="Gelman PINN Forecaster", layout="wide")
+
+# Device configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Physical Constants
 X_MAX_DIST = 18178.0
+T_MAX_YEARS = 70.0
 C_LOG_MAX = np.log10(212000 + 1)
+T_START_DATE = pd.Timestamp('1986-01-01')
 
-source_coord = np.array([13278097, 279314])
-target_coord = np.array([13286705, 298215])
-unit_vec = (target_coord - source_coord) / np.linalg.norm(target_coord - source_coord)
+# Geographic Anchors (Michigan State Plane / Lat Lon)
+SOURCE_COORD_SPL = np.array([13278097, 279314])
+TARGET_COORD_SPL = np.array([13286705, 298215])
+SOURCE_LAT_LON = [42.2650, -83.7950]  # Wagner Rd Source
+TARGET_LAT_LON = [42.3083, -83.7544]  # Barton Pond Intake
 
+# --- 2. Model Architecture ---
 class DioxanePINN(nn.Module):
     def __init__(self):
-        super().__init__()
+        super(DioxanePINN, self).__init__()
         self.network = nn.Sequential(
-            nn.Linear(2, 64), nn.Tanh(),
+            nn.Linear(3, 64), nn.Tanh(),
             nn.Linear(64, 64), nn.Tanh(),
             nn.Linear(64, 64), nn.Tanh(),
             nn.Linear(64, 64), nn.Tanh(),
@@ -27,52 +43,221 @@ class DioxanePINN(nn.Module):
         self.v_raw = nn.Parameter(torch.tensor([0.0]))
         self.D_raw = nn.Parameter(torch.tensor([0.0]))
 
-    def forward(self, x, t):
-        return self.network(torch.cat([x, t], dim=1))
+    def forward(self, x_combined):
+        return self.network(x_combined)
 
+    def get_physics_params(self, unit_type="Unit E"):
+        if "Unit E" in unit_type: # 130-170ft
+            v = 0.46 + (0.96 - 0.46) * torch.sigmoid(self.v_raw)
+            D = 5.47 + (21.90 - 5.47) * torch.sigmoid(self.D_raw)
+        else: # Unit C3
+            v = 0.41 + (0.68 - 0.41) * torch.sigmoid(self.v_raw)
+            D = 2.73 + (13.68 - 2.73) * torch.sigmoid(self.D_raw)
+        return v, D
+
+# --- 3. Model Loading Helper ---
 @st.cache_resource
-def load_model():
-    model = DioxanePINN()
-    model.load_state_dict(torch.load('model_130_170ftploss5', map_location='cpu', weights_only=True))
-    model.eval()
-    return model
+def load_model(unit_selection):
+    """Loads the specific model weights based on user selection."""
+    model = DioxanePINN().to(device)
+    
+    # Logic to select the correct weight file
+    # NOTE: Ensure these .pth files are in the same directory as app.py 
+    # or update the path variable below.
+    if "Unit E" in unit_selection:
+        filename = 'pinn_130_170_3input_final.pth'
+    else:
+        filename = 'weights_50_90ft_v2.pth'
+    
+    try:
+        checkpoint = torch.load(filename, map_location=device)
+        state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
+        model.load_state_dict(state_dict)
+        model.eval()
+        return model, filename
+    except FileNotFoundError:
+        st.error(f"⚠️ Model file `{filename}` not found. Please upload it to the app directory.")
+        return None, filename
 
+# --- 4. Main Dashboard UI ---
 st.title("🧪 Gelman 1,4-Dioxane Plume Forecaster")
-st.markdown("PINN model predicting contaminant migration toward Barton Pond (130-170 ft depth)")
+st.markdown("""
+**Physics-Informed Neural Network (PINN)** developed to forecast the migration of 1,4-Dioxane 
+at the Gelman Sciences site in Ann Arbor, MI.
+""")
 
-model = load_model()
-year = st.slider("Select Year", 1986, 2056, 2024)
+# Sidebar Controls
+st.sidebar.header("Model Configuration")
+selected_unit = st.sidebar.selectbox("Select Aquifer Unit", ["Unit E (130-170ft)", "Unit C3 (50-90ft)"])
+selected_year = st.sidebar.slider("Forecast Year", 1986, 2080, 2024)
 
-t_val = (year - 1986) / T_MAX_YEARS
-x_grid = torch.linspace(0, 1, 500).view(-1, 1)
-t_grid = torch.ones_like(x_grid) * t_val
+# Load Model
+model, loaded_filename = load_model(selected_unit)
 
-with torch.no_grad():
-    c_norm = model(x_grid, t_grid).numpy()
+if model:
+    # Extract Physics Parameters
+    v_tens, D_tens = model.get_physics_params(selected_unit)
+    v_val = v_tens.item() * 365.25
+    D_val = D_tens.item() * 365.25
 
-c_ppb = 10**(c_norm * C_LOG_MAX) - 1
-x_feet = x_grid.numpy() * X_MAX_DIST
+    # Sidebar Metrics
+    st.sidebar.markdown("---")
+    st.sidebar.subheader(" calibrated physics")
+    st.sidebar.metric("Learned Velocity (v)", f"{v_val:.1f} ft/yr")
+    st.sidebar.metric("Learned Dispersion (D)", f"{D_val:.0f} ft²/yr")
+    st.sidebar.success(f"Loaded: `{loaded_filename}`")
 
-geo_x = source_coord[0] + (x_feet * unit_vec[0])
-geo_y = source_coord[1] + (x_feet * unit_vec[1])
+    # --- TABS FOR VISUALIZATION ---
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🌍 Geographic Heatmap", 
+        "🗺️ Spatiotemporal Evolution", 
+        "🔍 Vertical Cross-Section", 
+        "⛰️ 3D Topography"
+    ])
 
-fig, ax = plt.subplots(figsize=(10, 8))
-sc = ax.scatter(geo_x, geo_y, c=c_ppb.flatten(), cmap='jet', s=10,
-                norm=LogNorm(vmin=1, vmax=100000))
-ax.scatter(*source_coord, color='red', s=150, marker='X', zorder=5, label='Gelman Source')
-ax.scatter(*target_coord, color='green', s=150, marker='*', zorder=5, label='Barton Pond')
-ax.set_title(f"Predicted Plume — Year: {year}", fontsize=14, fontweight='bold')
-ax.set_xlabel('Easting (ft)')
-ax.set_ylabel('Northing (ft)')
-ax.set_aspect('equal')
-ax.legend(loc='upper left')
-fig.colorbar(sc, ax=ax, label='1,4-Dioxane (ppb)')
-st.pyplot(fig)
+    # === TAB 1: GEOGRAPHIC HEATMAP (FOLIUM) ===
+    with tab1:
+        st.subheader(f"Geographic Plume Spread ({selected_year})")
+        
+        # Inference Logic
+        x_norm = torch.linspace(0, 1, 100, device=device).view(-1, 1)
+        z_mid = torch.ones_like(x_norm) * 0.5
+        t_val = (selected_year - 1986) / T_MAX_YEARS
+        t_norm = torch.ones_like(x_norm) * t_val
 
-with torch.no_grad():
-    c_pond = model(torch.tensor([[1.0]]), torch.tensor([[t_val]])).item()
-    c_pond_ppb = 10**(c_pond * C_LOG_MAX) - 1
+        with torch.no_grad():
+            c_out = model(torch.cat([x_norm, z_mid, t_norm], dim=1)).cpu().numpy()
+        
+        c_ppb = 10**(c_out * C_LOG_MAX) - 1
 
-st.metric("Concentration at Barton Pond", f"{c_pond_ppb:.2f} ppb",
-          delta="Safe" if c_pond_ppb < 7.2 else "Exceeds Limit",
-          delta_color="normal" if c_pond_ppb < 7.2 else "inverse")
+        # Interpolate Lat/Lon
+        lats = np.linspace(SOURCE_LAT_LON[0], TARGET_LAT_LON[0], 100)
+        lons = np.linspace(SOURCE_LAT_LON[1], TARGET_LAT_LON[1], 100)
+        
+        heat_data = [[lats[i], lons[i], float(c_ppb[i]/1000)] for i in range(100) if c_ppb[i] > 1.0]
+
+        # Map Creation
+        m = folium.Map(location=[42.288, -83.775], zoom_start=13, tiles='CartoDB positron')
+        plugins.HeatMap(heat_data, radius=20, blur=15, min_opacity=0.3).add_to(m)
+
+        # 7.2 ppb Front
+        front_idx = np.abs(c_ppb - 7.2).argmin()
+        if c_ppb[front_idx] >= 1.0: # Only show if plume exists
+            folium.Circle(
+                location=[lats[front_idx], lons[front_idx]],
+                radius=250, color='red', fill=True, fill_opacity=0.6,
+                popup=f'7.2 ppb Front ({selected_year})'
+            ).add_to(m)
+
+        # Markers
+        folium.Marker(SOURCE_LAT_LON, popup="Gelman Source", icon=folium.Icon(color='red', icon='info-sign')).add_to(m)
+        folium.Marker(TARGET_LAT_LON, popup="Barton Pond Intake", icon=folium.Icon(color='green', icon='leaf')).add_to(m)
+
+        # Render Map
+        st_folium(m, width=800, height=500)
+        
+        # Impact Metric
+        c_pond = c_ppb[-1].item()
+        st.metric(
+            "Concentration at Barton Pond Intake", 
+            f"{c_pond:.2f} ppb",
+            delta="Safe (<7.2 ppb)" if c_pond < 7.2 else "⚠️ EXCEEDS LIMIT",
+            delta_color="normal" if c_pond < 7.2 else "inverse"
+        )
+
+    # === TAB 2: SPATIOTEMPORAL EVOLUTION (MATPLOTLIB) ===
+    with tab2:
+        st.subheader("Plume Evolution: 1986 vs 2024 vs Forecast")
+        
+        years_to_plot = [1986, 2024, 2060]
+        fig2, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
+        
+        # Prepare Grid
+        x_res = 500
+        x_grid = torch.linspace(0, 1, x_res, device=device).view(-1, 1)
+        z_grid = torch.ones_like(x_grid) * 0.5 # Midpoint
+
+        for i, yr in enumerate(years_to_plot):
+            t_plot = torch.ones_like(x_grid) * ((yr - 1986) / T_MAX_YEARS)
+            with torch.no_grad():
+                c_out = model(torch.cat([x_grid, z_grid, t_plot], dim=1)).cpu().numpy()
+            
+            c_ppb_plot = 10**(c_out * C_LOG_MAX) - 1
+            
+            # Geo coords for plotting
+            easting = SOURCE_COORD_SPL[0] + (x_grid.cpu().numpy() * (TARGET_COORD_SPL[0] - SOURCE_COORD_SPL[0]))
+            northing = SOURCE_COORD_SPL[1] + (x_grid.cpu().numpy() * (TARGET_COORD_SPL[1] - SOURCE_COORD_SPL[1]))
+            
+            sc = axes[i].scatter(easting, northing, c=c_ppb_plot, cmap='jet', 
+                               norm=LogNorm(vmin=1, vmax=1e5), s=20)
+            
+            axes[i].set_title(f"Year: {yr}", fontsize=12, fontweight='bold')
+            axes[i].set_xlabel("Easting (ft)")
+            axes[i].grid(True, alpha=0.3)
+            
+            # Markers
+            axes[i].scatter(SOURCE_COORD_SPL[0], SOURCE_COORD_SPL[1], c='red', marker='X', s=100, label='Source')
+            axes[i].scatter(TARGET_COORD_SPL[0], TARGET_COORD_SPL[1], c='green', marker='*', s=150, label='Intake')
+        
+        axes[0].set_ylabel("Northing (ft)")
+        st.pyplot(fig2)
+
+    # === TAB 3: VERTICAL CROSS-SECTION ===
+    with tab3:
+        st.subheader(f"Vertical Plume Profile: {selected_unit}")
+        
+        # Depth ranges
+        if "Unit E" in selected_unit:
+            z_min, z_max = 130, 170
+        else:
+            z_min, z_max = 50, 90
+            
+        # Mesh Generation
+        x_res, z_res = 200, 100
+        x_mesh = np.linspace(0, 1, x_res)
+        z_mesh = np.linspace(0, 1, z_res)
+        X, Z = np.meshgrid(x_mesh, z_mesh)
+        t_mesh = (selected_year - 1986) / T_MAX_YEARS
+        
+        input_tensor = torch.tensor(
+            np.stack([X.ravel(), Z.ravel(), np.full(X.size, t_mesh)], axis=1), 
+            dtype=torch.float32
+        ).to(device)
+        
+        with torch.no_grad():
+            c_pred = model(input_tensor).cpu().numpy().reshape(z_res, x_res)
+        
+        # Plotting
+        fig3, ax3 = plt.subplots(figsize=(10, 4))
+        x_feet = X * X_MAX_DIST
+        z_feet = z_min + (Z * (z_max - z_min))
+        
+        heatmap = ax3.pcolormesh(x_feet, z_feet, c_pred, shading='gouraud', cmap='magma')
+        fig3.colorbar(heatmap, label='Norm. Log-Concentration')
+        ax3.invert_yaxis() # Depth increases downwards
+        ax3.set_ylabel("Depth (ft)")
+        ax3.set_xlabel("Distance from Source (ft)")
+        ax3.set_title(f"Vertical Slice ({selected_year})")
+        
+        st.pyplot(fig3)
+
+    # === TAB 4: 3D TOPOGRAPHY ===
+    with tab4:
+        st.subheader("3D Plume Landscape")
+        
+        # Re-using the mesh from Tab 3, just visualizing differently
+        fig4 = plt.figure(figsize=(10, 6))
+        ax4 = fig4.add_subplot(111, projection='3d')
+        
+        surf = ax4.plot_surface(x_feet, z_feet, c_pred, cmap='magma', edgecolor='none', alpha=0.85)
+        
+        ax4.set_xlabel('Distance (ft)')
+        ax4.set_ylabel('Depth (ft)')
+        ax4.set_zlabel('Log-Conc')
+        ax4.set_ylim(z_max, z_min) # Invert depth axis visually
+        ax4.view_init(elev=35, azim=-60)
+        
+        st.pyplot(fig4)
+
+else:
+    st.info("👈 Please upload the model weights (.pth files) to the app directory to begin.")
