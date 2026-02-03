@@ -112,15 +112,6 @@ if model:
         "⛰️ 3D Topography"
     ])
 
-    To fix the legend text visibility, I have added color: black; to the CSS style definition within the HTML string. This ensures the text renders in black regardless of the browser or Streamlit theme settings.
-
-Here is the updated code for Tab 1 in your app.py.
-
-📝 Updated app.py (Tab 1 Section)
-Replace the with tab1: block with this version:
-
-Python
-
     # === TAB 1: GEOGRAPHIC HEATMAP (FOLIUM) ===
     with tab1:
         st.subheader(f"Geographic Plume Spread ({selected_year})")
