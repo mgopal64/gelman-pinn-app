@@ -9,10 +9,10 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Wake up Streamlit app
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install Playwright
         run: |
@@ -26,8 +26,19 @@ jobs:
           (async () => {
             const browser = await chromium.launch();
             const page = await browser.newPage();
+            console.log('Loading page...');
             await page.goto('https://gelman-pinn-vis.streamlit.app/', { waitUntil: 'networkidle', timeout: 120000 });
-            await page.waitForTimeout(10000);
+
+            const wakeButton = await page.\$('button:has-text(\"Yes, get this app back up\")');
+            if (wakeButton) {
+              console.log('App is sleeping, clicking wake button...');
+              await wakeButton.click();
+              await page.waitForTimeout(30000);
+              console.log('Waited 30s after clicking wake button');
+            } else {
+              console.log('App appears to be awake already');
+            }
+
             console.log('Page title:', await page.title());
             await browser.close();
           })();
